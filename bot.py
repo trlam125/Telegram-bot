@@ -2,6 +2,7 @@ import asyncio
 import base64
 import io
 import logging
+from functools import wraps
 import mimetypes
 import os
 import re
@@ -11,11 +12,17 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from ddgs import DDGS
 from dotenv import load_dotenv
+
+load_dotenv()
+
 from docx import Document
 from openai import AsyncOpenAI
 from pypdf import PdfReader
 
 from media_utils import audio_to_wav, extract_video_frames
+
+from supabase_db import supabase_db
+from telegram_storage import archive_media_message
 from telegram import (
     BotCommand,
     BotCommandScopeAllPrivateChats,
@@ -31,11 +38,8 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
-    PicklePersistence,
     filters,
 )
-
-load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip()
@@ -132,6 +136,42 @@ WMO_WEATHER_CODES = {
     96: "Dông kèm mưa đá nhẹ",
     99: "Dông kèm mưa đá mạnh",
 }
+
+
+# -----------------------------
+# Supabase-backed state
+# -----------------------------
+
+def with_supabase_state(callback):
+    """Load context.user_data from Supabase before a handler and save it after.
+
+    This replaces PicklePersistence and works across restarts/redeploys.
+    """
+    @wraps(callback)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if user is None:
+            return await callback(update, context)
+
+        try:
+            await supabase_db.upsert_user(user)
+            state = await supabase_db.load_user_state(user.id)
+            context.user_data.clear()
+            context.user_data.update(state)
+        except Exception as exc:
+            logger.exception("Không thể tải state Supabase cho user %s: %s", user.id, exc)
+            # Continue with the current in-memory state so a temporary DB error
+            # does not completely disable the bot.
+
+        try:
+            return await callback(update, context)
+        finally:
+            try:
+                await supabase_db.save_user_state(user.id, dict(context.user_data))
+            except Exception as exc:
+                logger.exception("Không thể lưu state Supabase cho user %s: %s", user.id, exc)
+
+    return wrapped
 
 
 # -----------------------------
@@ -1243,10 +1283,19 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Bạn chưa khởi động bot. Hãy gửi /start trước.")
         return
 
+    photo = update.message.photo[-1]
+    await archive_media_message(
+        update,
+        context,
+        media=photo,
+        file_type="photo",
+        file_name=f"photo_{photo.file_unique_id}.jpg",
+        mime_type="image/jpeg",
+    )
+
     await update.effective_chat.send_action(ChatAction.TYPING)
 
     try:
-        photo = update.message.photo[-1]
         telegram_file = await photo.get_file()
         data = bytes(await telegram_file.download_as_bytearray())
 
@@ -1272,6 +1321,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     document = update.message.document
     filename = document.file_name or "document"
     mime_type = document.mime_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+    await archive_media_message(
+        update,
+        context,
+        media=document,
+        file_type="document",
+        file_name=filename,
+        mime_type=mime_type,
+    )
 
     if document.file_size and document.file_size > MAX_FILE_MB * 1024 * 1024:
         await update.message.reply_text(f"File quá lớn. Giới hạn hiện tại là {MAX_FILE_MB} MB.")
@@ -1352,6 +1410,19 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Bạn chưa khởi động bot. Hãy gửi /start trước.")
         return
 
+    video_name = getattr(video, "file_name", None) or (
+        f"video_note_{video.file_unique_id}.mp4" if update.message.video_note else "video.mp4"
+    )
+    video_mime = getattr(video, "mime_type", None) or "video/mp4"
+    await archive_media_message(
+        update,
+        context,
+        media=video,
+        file_type="video_note" if update.message.video_note else "video",
+        file_name=video_name,
+        mime_type=video_mime,
+    )
+
     file_size = getattr(video, "file_size", None)
     duration = float(getattr(video, "duration", 0) or 0)
 
@@ -1372,8 +1443,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.effective_chat.send_action(ChatAction.TYPING)
 
     prompt = (update.message.caption or "Hãy phân tích video này và cho tôi biết nội dung chính.").strip()
-    mime_type = getattr(video, "mime_type", None) or "video/mp4"
-    file_name = getattr(video, "file_name", None) or "video.mp4"
+    mime_type = video_mime
+    file_name = video_name
     suffix = Path(file_name).suffix.lower() or ".mp4"
 
     try:
@@ -1416,6 +1487,21 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Bạn chưa khởi động bot. Hãy gửi /start trước.")
         return
 
+    media_name = getattr(media, "file_name", None) or (
+        f"voice_{media.file_unique_id}.ogg" if update.message.voice else "audio.bin"
+    )
+    media_mime = getattr(media, "mime_type", None) or (
+        "audio/ogg" if update.message.voice else "application/octet-stream"
+    )
+    await archive_media_message(
+        update,
+        context,
+        media=media,
+        file_type="voice" if update.message.voice else "audio",
+        file_name=media_name,
+        mime_type=media_mime,
+    )
+
     file_size = getattr(media, "file_size", None)
     if file_size and file_size > MAX_AUDIO_MB * 1024 * 1024:
         await update.message.reply_text(
@@ -1426,9 +1512,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.effective_chat.send_action(ChatAction.TYPING)
 
     prompt = (update.message.caption or "Hãy chép lời và tóm tắt nội dung âm thanh này.").strip()
-    file_name = getattr(media, "file_name", None) or (
-        "voice.ogg" if update.message.voice else "audio.bin"
-    )
+    file_name = media_name
     suffix = Path(file_name).suffix.lower() or ".bin"
 
     try:
@@ -1544,46 +1628,57 @@ async def setup_bot_commands(application: Application) -> None:
     )
 
 
-def main() -> None:
-    persistence = PicklePersistence(filepath="bot_data.pkl")
-
+def build_application() -> Application:
     app = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
-        .persistence(persistence)
         .post_init(setup_bot_commands)
         .build()
     )
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("clear", clear_command))
-    app.add_handler(CommandHandler("reset", reset_command))
-    app.add_handler(CommandHandler("web", web_command))
-    app.add_handler(CommandHandler("weather", weather_command))
+    app.add_handler(CommandHandler("start", with_supabase_state(start)))
+    app.add_handler(CommandHandler("help", with_supabase_state(help_command)))
+    app.add_handler(CommandHandler("clear", with_supabase_state(clear_command)))
+    app.add_handler(CommandHandler("reset", with_supabase_state(reset_command)))
+    app.add_handler(CommandHandler("web", with_supabase_state(web_command)))
+    app.add_handler(CommandHandler("weather", with_supabase_state(weather_command)))
 
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.VIDEO | filters.VIDEO_NOTE, handle_video))
-    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_audio))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    app.add_handler(MessageHandler(filters.LOCATION, handle_location))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
-    app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
-    app.add_handler(MessageHandler(~filters.TEXT, unsupported_message))
+    app.add_handler(MessageHandler(filters.PHOTO, with_supabase_state(handle_photo)))
+    app.add_handler(
+        MessageHandler(filters.VIDEO | filters.VIDEO_NOTE, with_supabase_state(handle_video))
+    )
+    app.add_handler(
+        MessageHandler(filters.VOICE | filters.AUDIO, with_supabase_state(handle_audio))
+    )
+    app.add_handler(MessageHandler(filters.Document.ALL, with_supabase_state(handle_document)))
+    app.add_handler(MessageHandler(filters.LOCATION, with_supabase_state(handle_location)))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, with_supabase_state(chat))
+    )
+    app.add_handler(MessageHandler(filters.COMMAND, with_supabase_state(unknown_command)))
+    app.add_handler(MessageHandler(~filters.TEXT, with_supabase_state(unsupported_message)))
     app.add_error_handler(error_handler)
+    return app
+
+
+def main() -> None:
+    """Local development mode: polling. Production uses web_app.py + webhook."""
+    app = build_application()
 
     print("=" * 66)
-    print("Telegram bot ")
+    print("Telegram bot - local polling mode")
     print(f"Text model       : {TEXT_MODEL}")
     print(f"Vision model     : {VISION_MODEL}")
     print(f"Omni media model: {OMNI_MODEL}")
     print(f"NVIDIA endpoint  : {NVIDIA_BASE_URL}")
     print(f"Auto web search  : {AUTO_WEB_SEARCH}")
     print(f"Auto weather     : {AUTO_WEATHER}")
+    print("Persistence      : Supabase")
+    print("File storage     : Telegram private channel")
     print("Bot dang chay... Nhan Ctrl+C de dung.")
     print("=" * 66)
 
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=["message"])
 
 
 if __name__ == "__main__":

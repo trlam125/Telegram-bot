@@ -1,5 +1,92 @@
-.env
-.venv/
+# =========================
+# Python
+# =========================
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+# Environment / Secrets
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Local database / state
+# =========================
+*.pkl
+*.pickle
 bot_data.pkl
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+
+# =========================
+# Temporary files
+# =========================
+tmp/
+temp/
+*.tmp
+*.temp
+
+# =========================
+# Media / generated files
+# =========================
+downloads/
+uploads/
+output/
+outputs/
+generated/
+generated-image/
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# Python tooling
+# =========================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# =========================
+# Build / package
+# =========================
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =========================
+# Google Cloud local files
+# =========================
+.gcloud/
+
+# =========================
+# Misc
+# =========================
+*.bak
+*.swp
+*.swo
