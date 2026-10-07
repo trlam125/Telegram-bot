@@ -1,6 +1,6 @@
-# Telegram AI Bot - Telegram Storage + Supabase + Cloud Run
+# Telegram AI Bot - Vercel + Supabase + Telegram Storage
 
-Ban nay da duoc chuyen sang kien truc production:
+Bản này dùng kiến trúc production không cần máy cá nhân chạy liên tục:
 
 ```text
 Telegram user
@@ -9,7 +9,7 @@ Telegram user
 Telegram webhook
     |
     v
-Google Cloud Run (Python/FastAPI)
+Vercel FastAPI Function
     |---------------------> NVIDIA / Web / Weather
     |
     +----> Supabase PostgreSQL
@@ -20,222 +20,246 @@ Google Cloud Run (Python/FastAPI)
     |        - webhook deduplication
     |
     +----> Telegram private channel
-             - anh
+             - image
              - PDF/DOCX
              - video
              - audio/voice
 ```
 
-May tinh ca nhan co the tat sau khi deploy. Cloud Run nhan webhook truc tiep tu Telegram.
+Sau khi deploy và set webhook, có thể tắt VS Code, PowerShell và máy tính; bot vẫn chạy trên Vercel.
 
-## 1. Da thay doi gi?
+## 1. Các file dành cho Vercel
 
-- Bo `PicklePersistence` / `bot_data.pkl` khoi runtime.
-- `context.user_data` duoc load/save tu Supabase sau moi update.
-- Anh, document, video, audio/voice duoc copy vao private Telegram Storage Channel.
-- Metadata file duoc ghi vao bang `bot_files` cua Supabase.
-- Them webhook server `web_app.py` cho Cloud Run.
-- Them co che `bot_updates` de tranh Telegram webhook retry lam AI xu ly hai lan.
-- Van giu `python bot.py` de test local bang polling.
+- `app.py`: entrypoint FastAPI mà Vercel tự nhận diện.
+- `vercel.json`: đặt thời gian chạy tối đa 300 giây cho Function.
+- `.vercelignore`: loại secrets/cache/file local khỏi bundle.
+- `web_app.py`: webhook FastAPI thực tế.
+- `supabase_db.py`: state/history/metadata qua Supabase.
+- `telegram_storage.py`: copy media sang private Telegram channel.
 
-## 2. Tao database Supabase
+`Dockerfile` và `.dockerignore` cũ được giữ lại để tương thích nếu sau này muốn dùng container host khác; Vercel không cần hai file này.
 
-1. Tao/open Supabase project.
-2. Vao `SQL Editor`.
-3. Copy toan bo noi dung `supabase_schema.sql` va bam Run.
-4. Vao `Settings -> API Keys` / `Connect`.
-5. Lay:
-   - Project URL -> `SUPABASE_URL`
-   - Secret key dang `sb_secret_...` -> `SUPABASE_SECRET_KEY`
+## 2. Supabase
 
-Khong dua secret key len GitHub.
+Trong Supabase -> SQL Editor, chạy toàn bộ `supabase_schema.sql` một lần.
 
-Sau khi chay SQL se co 4 bang:
+Cần lấy:
 
-- `bot_users`
-- `bot_user_state`
-- `bot_files`
-- `bot_updates`
-
-## 3. Cau hinh `.env`
-
-Copy `.env.example` thanh `.env`:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Dien cac bien quan trong:
-
-```env
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_STORAGE_CHAT_ID=-100...
-WEBHOOK_SECRET_TOKEN=mot_chuoi_ngau_nhien
-
+```text
 SUPABASE_URL=https://xxxxx.supabase.co
 SUPABASE_SECRET_KEY=sb_secret_...
-
-NVIDIA_API_KEY=nvapi-...
 ```
 
-`WEBHOOK_SECRET_TOKEN` chi nen gom chu, so, `_` va `-`.
+Không đưa secret key lên GitHub.
 
-## 4. Test local truoc khi deploy
+## 3. Telegram Storage
 
-Neu bot dang co webhook cu, xoa webhook truoc:
+Bot phải là Administrator của private channel storage.
 
-```powershell
-python delete_webhook.py
-```
-
-Cai dependencies:
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
-Chay:
-
-```powershell
-python bot.py
-```
-
-Test:
-
-1. `/start`
-2. Chat vai cau.
-3. Tat bot, chay lai, hoi tiep -> history/state van lay tu Supabase.
-4. Gui anh/PDF/video/audio -> file phai xuat hien trong `Lam's storage`.
-5. Supabase `bot_files` phai co metadata file.
-
-`bot_data.pkl` cu khong con duoc doc/ghi.
-
-## 5. Deploy Google Cloud Run
-
-Can cai Google Cloud CLI va dang nhap:
-
-```powershell
-gcloud auth login
-gcloud config set project YOUR_GOOGLE_CLOUD_PROJECT_ID
-```
-
-Project co san `Dockerfile`, nen dung Cloud Run source deploy truc tiep.
-
-Lenh mau PowerShell (thay cac gia tri `...`):
-
-```powershell
-gcloud run deploy telegram-ai-bot --source . --region asia-southeast1 --allow-unauthenticated --memory 1Gi --cpu 1 --timeout 300 --max-instances 1 --concurrency 10 --set-env-vars "TELEGRAM_BOT_TOKEN=...,TELEGRAM_STORAGE_CHAT_ID=-100...,WEBHOOK_SECRET_TOKEN=...,SUPABASE_URL=https://xxxxx.supabase.co,SUPABASE_SECRET_KEY=sb_secret_...,NVIDIA_API_KEY=nvapi-...,NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1,NVIDIA_TEXT_MODEL=nvidia/nemotron-3-super-120b-a12b,NVIDIA_VISION_MODEL=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,NVIDIA_OMNI_MODEL=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
-```
-
-`--max-instances 1` duoc de san cho bot hien tai vi state cua cung mot user nen duoc xu ly tuan tu. Sau nay neu can scale lon hon thi nen bo sung distributed locking/queue.
-
-Sau khi deploy, lay URL:
-
-```powershell
-$URL = gcloud run services describe telegram-ai-bot --region asia-southeast1 --format="value(status.url)"
-$URL
-```
-
-Vi du:
+Biến môi trường cần có:
 
 ```text
-https://telegram-ai-bot-xxxxx-as.a.run.app
+TELEGRAM_STORAGE_CHAT_ID=-100xxxxxxxxxx
 ```
 
-## 6. Dang ky Telegram webhook
+File thật nằm trong Telegram channel. Supabase chỉ lưu metadata và `storage_message_id`/`file_id`.
 
-Tren may local, `.env` phai co cung `TELEGRAM_BOT_TOKEN` va `WEBHOOK_SECRET_TOKEN` da deploy.
+## 4. Đưa project lên GitHub
 
-Chay:
+Upload project lên một repo GitHub.
 
-```powershell
-python set_webhook.py $URL
-```
-
-Neu thanh cong se thay:
+Không upload:
 
 ```text
-'ok': True
-Webhook: https://.../telegram/webhook
+.env
+.venv/
+bot_data.pkl
 ```
 
-Tu luc nay Telegram gui message thang den Cloud Run. Ban co the tat may tinh.
+`.gitignore` và `.vercelignore` đã chặn các file local phổ biến.
 
-## 7. Kiem tra sau khi deploy
-
-Mo URL Cloud Run tren browser:
+Cấu trúc quan trọng:
 
 ```text
-https://YOUR_CLOUD_RUN_URL/healthz
+app.py
+bot.py
+web_app.py
+supabase_db.py
+telegram_storage.py
+media_utils.py
+requirements.txt
+vercel.json
+supabase_schema.sql
+.gitignore
+.vercelignore
+.env.example
 ```
 
-Ket qua:
+## 5. Import vào Vercel - không cần cài gì trên máy
+
+1. Mở Vercel trên trình duyệt.
+2. `Add New -> Project`.
+3. Import repo GitHub của bot.
+4. Vercel tự nhận FastAPI từ `app.py`.
+5. Không cần Build Command.
+6. Không cần Output Directory.
+7. Thêm Environment Variables trước khi deploy.
+
+Các biến bắt buộc:
+
+```text
+TELEGRAM_BOT_TOKEN
+TELEGRAM_STORAGE_CHAT_ID
+WEBHOOK_SECRET_TOKEN
+SUPABASE_URL
+SUPABASE_SECRET_KEY
+NVIDIA_API_KEY
+```
+
+Các biến đang có sẵn giá trị mặc định nhưng có thể thêm để cấu hình:
+
+```text
+NVIDIA_BASE_URL
+NVIDIA_TEXT_MODEL
+NVIDIA_VISION_MODEL
+NVIDIA_OMNI_MODEL
+MAX_HISTORY_MESSAGES
+MAX_TOKENS
+TEMPERATURE
+MAX_DOCUMENT_CHARS
+MAX_FILE_MB
+MAX_VIDEO_MB
+MAX_VIDEO_SECONDS
+VIDEO_FALLBACK_FRAMES
+MAX_AUDIO_MB
+MEDIA_REQUEST_TIMEOUT
+AUTO_WEB_SEARCH
+AUTO_WEATHER
+WEB_MAX_RESULTS
+DEFAULT_WEATHER_CITY
+CLEAR_SCREEN_MAX_MESSAGES
+```
+
+Không cần biến `PORT` trên Vercel.
+
+## 6. Deploy
+
+Bấm `Deploy` trên Vercel.
+
+Sau khi thành công sẽ có URL dạng:
+
+```text
+https://ten-project.vercel.app
+```
+
+Mở URL gốc, kết quả mong đợi:
 
 ```json
-{"ok": true}
+{"ok":true,"service":"telegram-ai-bot","mode":"webhook"}
 ```
 
-Sau do nhan bot tren Telegram:
+Health check:
+
+```text
+https://ten-project.vercel.app/healthz
+```
+
+Kết quả:
+
+```json
+{"ok":true}
+```
+
+## 7. Set Telegram webhook không cần cài CLI
+
+Webhook của project là:
+
+```text
+https://ten-project.vercel.app/telegram/webhook
+```
+
+Mở trình duyệt và gọi Telegram Bot API một lần:
+
+```text
+https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=https://ten-project.vercel.app/telegram/webhook&secret_token=<WEBHOOK_SECRET_TOKEN>&drop_pending_updates=true
+```
+
+Thay `<BOT_TOKEN>` và `<WEBHOOK_SECRET_TOKEN>` bằng giá trị thật.
+
+Kết quả mong đợi:
+
+```json
+{"ok":true,"result":true,"description":"Webhook was set"}
+```
+
+Không chia sẻ URL chứa bot token. Nếu lo lịch sử trình duyệt, mở tab riêng tư/incognito rồi đóng tab sau khi set xong.
+
+Kiểm tra webhook:
+
+```text
+https://api.telegram.org/bot<BOT_TOKEN>/getWebhookInfo
+```
+
+`url` phải là URL `/telegram/webhook` của Vercel và không nên có `last_error_message`.
+
+## 8. Test production
+
+Không chạy `python bot.py` cùng lúc với webhook production.
+
+Trên Telegram thử:
 
 ```text
 /start
 ```
 
-Thu tiep:
+Sau đó thử:
 
 - chat AI
 - `/weather Ha Noi`
 - `/web ...`
-- gui anh
-- gui PDF
-- gui video nho
-- gui voice/audio
+- gửi ảnh
+- gửi PDF/DOCX
+- gửi video nhỏ
+- gửi voice/audio
 
-Kiem tra dong thoi:
+Kiểm tra đồng thời:
 
-- file nam trong `Lam's storage`
-- `bot_files` co record moi
-- `bot_user_state` co state cua user
+- bot vẫn trả lời khi máy cá nhân tắt;
+- file xuất hiện trong private Telegram storage channel;
+- Supabase `bot_files` có metadata;
+- Supabase `bot_user_state` có state/history.
 
-## 8. Chuyen ve test local sau khi da deploy
+## 9. Local polling vẫn dùng được
 
-Telegram khong the dung webhook va polling cho cung mot bot cung luc.
-
-Truoc khi chay local:
+Nếu muốn quay lại test local, trước hết xóa webhook rồi mới chạy polling:
 
 ```powershell
 python delete_webhook.py
 python bot.py
 ```
 
-Sau khi test xong, dang ky lai webhook:
+Sau khi test xong cần set lại webhook production.
 
-```powershell
-python set_webhook.py https://YOUR_CLOUD_RUN_URL
-```
+## 10. Lưu ý Vercel
 
-## 9. File quan trong
+- FastAPI chạy dưới dạng một Vercel Function.
+- Hobby + Fluid Compute có giới hạn tối đa 300 giây mỗi invocation.
+- Bundle Python phải nằm trong giới hạn của Vercel; `requirements.txt` đã bỏ `uvicorn[standard]` vì Vercel không cần Uvicorn để serve FastAPI.
+- File local trên Function là tạm thời; project này không dùng local disk làm persistence.
+- File dài hạn ở Telegram Storage, state/database ở Supabase.
+- Nếu một video/audio xử lý vượt giới hạn Function thì request có thể timeout; khi đó cần giảm giới hạn media hoặc tách media worker ở giai đoạn sau.
+
+## 11. Bảo mật
+
+Tuyệt đối không commit:
 
 ```text
-bot.py                  Logic bot + Supabase state
-supabase_db.py          Async Supabase Data API client
-telegram_storage.py     Copy media -> private Telegram channel
-web_app.py              FastAPI webhook server cho Cloud Run
-supabase_schema.sql     Schema database
-set_webhook.py          Dang ky webhook production
-delete_webhook.py       Xoa webhook de test polling local
-Dockerfile              Container Cloud Run
-.env.example            Mau bien moi truong
+.env
+TELEGRAM_BOT_TOKEN
+NVIDIA_API_KEY
+SUPABASE_SECRET_KEY
+SUPABASE_SERVICE_ROLE_KEY
+WEBHOOK_SECRET_TOKEN
 ```
 
-## Bao mat
-
-Khong commit:
-
-- `.env`
-- `TELEGRAM_BOT_TOKEN`
-- `NVIDIA_API_KEY`
-- `SUPABASE_SECRET_KEY`
-- legacy `SUPABASE_SERVICE_ROLE_KEY`
-
-`.env` da nam trong `.gitignore` va `.dockerignore`.
+Nếu secret đã từng bị push vào repo public, phải rotate/revoke secret cũ chứ chỉ thêm `.gitignore` là chưa đủ.

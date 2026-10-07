@@ -14,7 +14,7 @@ BASE_URL = (sys.argv[1] if len(sys.argv) > 1 else os.getenv("WEBHOOK_BASE_URL", 
 if not TOKEN:
     raise RuntimeError("Thiếu TELEGRAM_BOT_TOKEN")
 if not BASE_URL:
-    raise RuntimeError("Dùng: python set_webhook.py https://<cloud-run-url>")
+    raise RuntimeError("Dùng: python set_webhook.py https://<deployment-url>")
 
 WEBHOOK_URL = f"{BASE_URL}/telegram/webhook"
 
