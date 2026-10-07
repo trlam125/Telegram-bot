@@ -1123,7 +1123,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "5. Ảnh: gửi ảnh kèm caption như 'Đọc chữ và giải thích ảnh này'.\n\n"
         "6. Video: quay bằng điện thoại rồi gửi MP4/MOV vào bot, có thể kèm caption như 'Tóm tắt video này'.\n\n"
         "7. Audio/Voice: gửi file âm thanh hoặc tin nhắn thoại để bot nghe, chép lời và phân tích.\n\n"
-        "Lưu ý: video mặc định tối đa 120 giây và 20 MB; PDF scan chỉ chứa ảnh có thể không trích xuất được chữ."
+        "Lưu ý: media vẫn được lưu vào Storage trước. Giới hạn 20 MB mặc định chỉ áp dụng cho bước bot tải file về để AI phân tích; video phân tích tối đa 120 giây. PDF scan chỉ chứa ảnh có thể không trích xuất được chữ."
     )
 
 
@@ -1322,7 +1322,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     filename = document.file_name or "document"
     mime_type = document.mime_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
-    await archive_media_message(
+    storage_message_id = await archive_media_message(
         update,
         context,
         media=document,
@@ -1332,7 +1332,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
     if document.file_size and document.file_size > MAX_FILE_MB * 1024 * 1024:
-        await update.message.reply_text(f"File quá lớn. Giới hạn hiện tại là {MAX_FILE_MB} MB.")
+        if storage_message_id:
+            await update.message.reply_text(
+                f"Đã lưu file vào Storage. File vượt {MAX_FILE_MB} MB nên bot không tải về để AI phân tích."
+            )
+        else:
+            await update.message.reply_text(
+                f"File vượt {MAX_FILE_MB} MB nên bot không thể tải về để AI phân tích. "
+                "Đồng thời chưa xác nhận được việc lưu vào Storage."
+            )
         return
 
     await update.effective_chat.send_action(ChatAction.TYPING)
@@ -1414,7 +1422,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"video_note_{video.file_unique_id}.mp4" if update.message.video_note else "video.mp4"
     )
     video_mime = getattr(video, "mime_type", None) or "video/mp4"
-    await archive_media_message(
+    storage_message_id = await archive_media_message(
         update,
         context,
         media=video,
@@ -1427,10 +1435,15 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     duration = float(getattr(video, "duration", 0) or 0)
 
     if file_size and file_size > MAX_VIDEO_MB * 1024 * 1024:
-        await update.message.reply_text(
-            f"Video quá lớn. Giới hạn hiện tại là {MAX_VIDEO_MB} MB. "
-            "Hãy giảm chất lượng hoặc cắt video ngắn hơn."
-        )
+        if storage_message_id:
+            await update.message.reply_text(
+                f"Đã lưu video vào Storage. Video vượt {MAX_VIDEO_MB} MB nên bot không tải về để AI phân tích."
+            )
+        else:
+            await update.message.reply_text(
+                f"Video vượt {MAX_VIDEO_MB} MB nên bot không thể tải về để AI phân tích. "
+                "Đồng thời chưa xác nhận được việc lưu vào Storage."
+            )
         return
 
     if duration and duration > MAX_VIDEO_SECONDS:
@@ -1493,7 +1506,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     media_mime = getattr(media, "mime_type", None) or (
         "audio/ogg" if update.message.voice else "application/octet-stream"
     )
-    await archive_media_message(
+    storage_message_id = await archive_media_message(
         update,
         context,
         media=media,
@@ -1504,9 +1517,15 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     file_size = getattr(media, "file_size", None)
     if file_size and file_size > MAX_AUDIO_MB * 1024 * 1024:
-        await update.message.reply_text(
-            f"Audio quá lớn. Giới hạn hiện tại là {MAX_AUDIO_MB} MB."
-        )
+        if storage_message_id:
+            await update.message.reply_text(
+                f"Đã lưu audio vào Storage. Audio vượt {MAX_AUDIO_MB} MB nên bot không tải về để AI phân tích."
+            )
+        else:
+            await update.message.reply_text(
+                f"Audio vượt {MAX_AUDIO_MB} MB nên bot không thể tải về để AI phân tích. "
+                "Đồng thời chưa xác nhận được việc lưu vào Storage."
+            )
         return
 
     await update.effective_chat.send_action(ChatAction.TYPING)
