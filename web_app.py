@@ -10,6 +10,7 @@ from telegram import Update
 
 from bot import build_application, setup_bot_commands
 from gateway import router as gateway_router
+from gateway_auth_diagnostics import DIAGNOSTIC_VERSION
 from supabase_db import supabase_db
 
 logging.basicConfig(
@@ -48,7 +49,7 @@ async def root() -> dict:
 
 @app.get("/healthz")
 async def healthz() -> dict:
-    return {"ok": True}
+    return {"ok": True, "auth_diagnostics": DIAGNOSTIC_VERSION}
 
 
 @app.post("/telegram/webhook")

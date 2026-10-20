@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from telegram.error import Forbidden, RetryAfter, TelegramError
 
 from supabase_db import supabase_db
+from gateway_auth_diagnostics import log_auth_rejection, log_config_error
 
 logger = logging.getLogger("telegram-notification-gateway")
 router = APIRouter(prefix="/gateway/v1", tags=["Notification gateway"])
@@ -51,13 +52,13 @@ def _configured_keys() -> dict[str, str]:
     keys: dict[str, str] = {}
     raw = os.getenv("GATEWAY_API_KEYS", "").strip()
     if raw:
-        for item in raw.split(";"):
+        for entry_index, item in enumerate(raw.split(";"), start=1):
             if not item.strip():
                 continue
             project, separator, secret = item.strip().partition(":")
             project, secret = project.strip(), secret.strip()
             if not separator or not project or not secret or project in keys:
-                logger.error("Invalid or duplicate GATEWAY_API_KEYS entry")
+                log_config_error(entry_index=entry_index, duplicate=bool(project and project in keys))
                 return {}
             keys[project] = secret
     single_key = os.getenv("GATEWAY_API_KEY", "").strip()
@@ -69,14 +70,17 @@ def _configured_keys() -> dict[str, str]:
 def _authenticated_source(key: str | None) -> str:
     keys = _configured_keys()
     if not keys:
+        log_auth_rejection("no_configured_keys", keys, key)
         raise HTTPException(status_code=503, detail="Gateway credentials not configured")
     if not key:
+        log_auth_rejection("missing_key", keys, key)
         raise HTTPException(status_code=401, detail="Invalid gateway key")
 
     # Compare against all keys without short circuiting to avoid timing leaks.
     matched = [project for project, secret in keys.items()
                if secrets.compare_digest(key, secret)]
     if not matched:
+        log_auth_rejection("key_mismatch", keys, key)
         raise HTTPException(status_code=401, detail="Invalid gateway key")
     return matched[0]
 
