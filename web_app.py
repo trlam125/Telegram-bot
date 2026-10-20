@@ -9,6 +9,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from telegram import Update
 
 from bot import build_application, setup_bot_commands
+from gateway import router as gateway_router
 from supabase_db import supabase_db
 
 logging.basicConfig(
@@ -35,7 +36,9 @@ async def lifespan(_: FastAPI):
         await telegram_app.shutdown()
 
 
-app = FastAPI(title="Telegram AI Bot", lifespan=lifespan)
+app = FastAPI(title="Telegram AI Bot + Notification Gateway", lifespan=lifespan)
+app.state.telegram_app = telegram_app
+app.include_router(gateway_router)
 
 
 @app.get("/")

@@ -226,4 +226,65 @@ class SupabaseDB:
         response.raise_for_status()
 
 
+    async def set_alert_subscription(self, telegram_id: int, enabled: bool) -> None:
+        """Register or opt out a private-chat user for ALL gateway notifications."""
+        response = await self._request(
+            "POST", "bot_alert_subscribers",
+            params={"on_conflict": "telegram_id"},
+            json_body={"telegram_id": int(telegram_id), "enabled": enabled},
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
+        response.raise_for_status()
+
+    async def list_alert_subscribers(self) -> list[int]:
+        """Page through all subscribers; PostgREST may cap result rows."""
+        result: list[int] = []
+        offset = 0
+        page_size = 500
+        while True:
+            response = await self._request(
+                "GET", "bot_alert_subscribers",
+                params={
+                    "select": "telegram_id",
+                    "enabled": "eq.true",
+                    "order": "telegram_id.asc",
+                    "limit": str(page_size),
+                    "offset": str(offset),
+                },
+            )
+            response.raise_for_status()
+            rows = response.json() or []
+            result.extend(int(row["telegram_id"]) for row in rows)
+            if len(rows) < page_size:
+                return result
+            offset += page_size
+
+    async def claim_gateway_event(self, source: str, event_id: str) -> bool:
+        """Atomic unique INSERT, used to avoid duplicate alerts across deployments."""
+        response = await self._request(
+            "POST", "bot_gateway_events",
+            json_body={"source": source, "event_id": event_id},
+            prefer="return=minimal",
+        )
+        if response.status_code == 409:  # duplicate composite primary key
+            return False
+        response.raise_for_status()
+        return True
+
+    async def finish_gateway_event(
+        self, source: str, event_id: str, *, sent: int, failed: int, blocked: int
+    ) -> None:
+        response = await self._request(
+            "PATCH", "bot_gateway_events",
+            params={"source": f"eq.{source}", "event_id": f"eq.{event_id}"},
+            json_body={
+                "status": "done" if not failed else "partial",
+                "sent": sent, "failed": failed, "blocked": blocked,
+                "finished_at": _utc_now(),
+            },
+            prefer="return=minimal",
+        )
+        response.raise_for_status()
+
+
 supabase_db = SupabaseDB()

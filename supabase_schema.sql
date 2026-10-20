@@ -55,3 +55,36 @@ grant all on table public.bot_user_state to service_role;
 grant all on table public.bot_files to service_role;
 grant all on table public.bot_updates to service_role;
 grant usage, select on all sequences in schema public to service_role;
+
+-- Gateway: mọi người dùng chat riêng và nhấn /start đều được đăng ký nhận thông báo.
+create table if not exists public.bot_alert_subscribers (
+    telegram_id bigint primary key references public.bot_users(telegram_id) on delete cascade,
+    enabled boolean not null default true,
+    created_at timestamptz not null default now()
+);
+
+-- Gateway: chống gửi trùng khi client cung cấp event_id.
+create table if not exists public.bot_gateway_events (
+    source text not null,
+    event_id text not null,
+    status text not null default 'processing'
+        check (status in ('processing', 'done', 'partial')),
+    sent integer not null default 0,
+    failed integer not null default 0,
+    blocked integer not null default 0,
+    created_at timestamptz not null default now(),
+    finished_at timestamptz,
+    primary key (source, event_id)
+);
+
+alter table public.bot_alert_subscribers enable row level security;
+alter table public.bot_gateway_events enable row level security;
+grant all on table public.bot_alert_subscribers to service_role;
+grant all on table public.bot_gateway_events to service_role;
+
+-- Cho phép người dùng đã /start trước khi nâng cấp cũng nhận cảnh báo.
+insert into public.bot_alert_subscribers (telegram_id, enabled)
+select s.telegram_user_id, true
+from public.bot_user_state s
+where s.state ->> 'started' = 'true'
+on conflict (telegram_id) do nothing;

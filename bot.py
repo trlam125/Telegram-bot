@@ -1010,7 +1010,8 @@ async def answer_weather(
 
 # Danh sách command dùng chung cho Telegram menu
 BOT_COMMANDS = [
-    BotCommand("start", "Bắt đầu sử dụng bot"),
+    BotCommand("start", "Bắt đầu sử dụng bot và nhận thông báo"),
+    BotCommand("stop", "Tắt thông báo từ gateway"),
     BotCommand("clear", "Xóa tin nhắn trên màn hình chat"),
     BotCommand("reset", "Xóa ngữ cảnh AI và tài liệu"),
     BotCommand("web", "Tìm thông tin trên web"),
@@ -1089,6 +1090,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.clear()
     context.user_data["started"] = True
 
+    subscription_ok = True
+    if update.effective_chat and update.effective_chat.type == "private":
+        try:
+            await supabase_db.set_alert_subscription(update.effective_user.id, True)
+        except Exception:
+            subscription_ok = False
+            logger.exception("Không thể đăng ký cảnh báo cho user %s", update.effective_user.id)
+
     # Đồng bộ command cho chính private chat này.
     # Nhờ vậy khi người dùng gõ '/', Telegram có danh sách lệnh để gợi ý.
     try:
@@ -1099,6 +1108,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Xin chào! Tôi là một trợ lý AI mini được thiết kế để hoạt động trên Telegram. "
         "Tôi ưu tiên trả lời bằng tiếng Việt nếu bạn sử dụng tiếng Việt trong cuộc trò chuyện."
+        + ("\n\n🔔 Đã bật nhận thông báo từ các hệ thống kết nối. Gửi /stop để tắt."
+           if subscription_ok and update.effective_chat and update.effective_chat.type == "private"
+           else ("\n\nĐể nhận cảnh báo, hãy dùng /start trong chat riêng với bot."
+                 if update.effective_chat and update.effective_chat.type != "private"
+                 else "\n\n⚠️ Chưa bật được thông báo. Hãy thử /start lại sau khi quản trị viên kiểm tra database."))
+    )
+
+
+async def stop_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Opt out of broadcasts without disabling AI chat functionality."""
+    if not update.effective_chat or update.effective_chat.type != "private":
+        await update.effective_message.reply_text("Vui lòng dùng /stop trong chat riêng với bot.")
+        return
+    try:
+        await supabase_db.set_alert_subscription(update.effective_user.id, False)
+    except Exception:
+        logger.exception("Không thể hủy đăng ký user %s", update.effective_user.id)
+        await update.message.reply_text("Không thể tắt thông báo lúc này, vui lòng thử lại.")
+        return
+    await update.message.reply_text(
+        "🔕 Đã tắt thông báo từ các hệ thống kết nối. "
+        "Bạn vẫn có thể chat với AI. Gửi /start để bật lại."
     )
 
 
@@ -1109,6 +1140,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     await update.message.reply_text(
         "CÁCH DÙNG BOT V4\n\n"
+        "/start - Bật nhận cảnh báo từ các project qua gateway.\n"
+        "/stop - Ngừng nhận cảnh báo, vẫn chat AI bình thường.\n"
         "/clear - Xóa các tin nhắn gần đây khỏi màn hình chat, không xóa ngữ cảnh AI.\n"
         "/reset - Xóa ngữ cảnh AI và tài liệu, nhưng giữ tin nhắn trên màn hình.\n\n"
         "1. Chat bình thường: gửi tin nhắn. Bot tự tìm web với một số câu hỏi mang tính thời điểm.\n\n"
@@ -1656,6 +1689,7 @@ def build_application() -> Application:
     )
 
     app.add_handler(CommandHandler("start", with_supabase_state(start)))
+    app.add_handler(CommandHandler("stop", with_supabase_state(stop_alerts)))
     app.add_handler(CommandHandler("help", with_supabase_state(help_command)))
     app.add_handler(CommandHandler("clear", with_supabase_state(clear_command)))
     app.add_handler(CommandHandler("reset", with_supabase_state(reset_command)))
