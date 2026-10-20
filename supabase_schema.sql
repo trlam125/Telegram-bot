@@ -88,3 +88,34 @@ select s.telegram_user_id, true
 from public.bot_user_state s
 where s.state ->> 'started' = 'true'
 on conflict (telegram_id) do nothing;
+
+-- PHASE 1: private signed uploads (existing bot tables remain unchanged).
+-- Create Storage bucket `telegram-gateway-temp` in Supabase Dashboard > Storage,
+-- with PUBLIC OFF and file size limit 50 MB (Free plan may enforce 50 MB).
+create table if not exists public.bot_gateway_uploads (
+    id uuid primary key,
+    source text not null,
+    event_id text,
+    object_path text not null unique,
+    filename text not null,
+    media_type text not null check (media_type in ('photo','video','document','audio','voice','animation')),
+    file_size bigint not null check (file_size > 0 and file_size <= 49000000),
+    message text not null default 'Tệp đính kèm',
+    title text,
+    level text not null default 'info' check (level in ('info','warning','critical')),
+    status text not null default 'pending' check (status in ('pending','processing','done','partial','failed')),
+    telegram_file_id text,
+    storage_message_id bigint,
+    sent integer not null default 0,
+    failed integer not null default 0,
+    blocked integer not null default 0,
+    temp_deleted boolean not null default false,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+create unique index if not exists idx_bot_gateway_uploads_event
+    on public.bot_gateway_uploads (source,event_id) where event_id is not null;
+create index if not exists idx_bot_gateway_uploads_cleanup
+    on public.bot_gateway_uploads (created_at) where temp_deleted=false;
+alter table public.bot_gateway_uploads enable row level security;
+grant all on table public.bot_gateway_uploads to service_role;

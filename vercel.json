@@ -4,5 +4,11 @@
     "app.py": {
       "maxDuration": 300
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/gateway/v1/media/staged/admin/cleanup",
+      "schedule": "0 3 * * *"
+    }
+  ]
 }
