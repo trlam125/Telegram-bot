@@ -259,6 +259,56 @@ class SupabaseDB:
                 return result
             offset += page_size
 
+    async def set_daily_weather_subscription(self, telegram_id: int, enabled: bool) -> None:
+        """Update only weather notifications, never emergency alert settings."""
+        response = await self._request(
+            "PATCH", "bot_users",
+            params={"telegram_id": f"eq.{int(telegram_id)}"},
+            json_body={"weather_daily_enabled": bool(enabled)},
+            prefer="return=minimal",
+        )
+        response.raise_for_status()
+
+    async def set_daily_weather_city(self, telegram_id: int, city: str) -> None:
+        response = await self._request(
+            "PATCH", "bot_users",
+            params={"telegram_id": f"eq.{int(telegram_id)}"},
+            json_body={"weather_daily_city": city[:180]},
+            prefer="return=minimal",
+        )
+        response.raise_for_status()
+
+    async def list_daily_weather_recipients(self) -> list[dict]:
+        """Read all users who have not opted out of daily weather."""
+        result: list[dict] = []
+        offset, page_size = 0, 500
+        while True:
+            response = await self._request(
+                "GET", "bot_users",
+                params={
+                    "select": "telegram_id,weather_daily_city",
+                    "weather_daily_enabled": "eq.true",
+                    "order": "telegram_id.asc",
+                    "limit": str(page_size),
+                    "offset": str(offset),
+                },
+            )
+            response.raise_for_status()
+            rows = response.json() or []
+            result.extend(rows)
+            if len(rows) < page_size:
+                return result
+            offset += page_size
+
+    async def release_daily_weather_claim(self, event_id: str) -> None:
+        """Allow retry when Telegram delivery itself failed."""
+        response = await self._request(
+            "DELETE", "bot_gateway_events",
+            params={"source": "eq.daily-weather", "event_id": f"eq.{event_id}"},
+            prefer="return=minimal",
+        )
+        response.raise_for_status()
+
     async def claim_gateway_event(self, source: str, event_id: str) -> bool:
         """Atomic unique INSERT, used to avoid duplicate alerts across deployments."""
         response = await self._request(

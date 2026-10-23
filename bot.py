@@ -990,6 +990,11 @@ async def answer_weather(
                 )
                 return True
             context.user_data["weather_city"] = selected_city
+            if update.effective_user and update.effective_chat and update.effective_chat.type == "private":
+                try:
+                    await supabase_db.set_daily_weather_city(update.effective_user.id, str(selected_city))
+                except Exception:
+                    logger.exception("Could not save daily weather city for user %s", update.effective_user.id)
 
         weather_context = format_weather_context(weather)
         try:
@@ -1015,7 +1020,9 @@ BOT_COMMANDS = [
     BotCommand("clear", "Xóa tin nhắn trên màn hình chat"),
     BotCommand("reset", "Xóa ngữ cảnh AI và tài liệu"),
     BotCommand("web", "Tìm thông tin trên web"),
-    BotCommand("weather", "Xem thời tiết theo thành phố"),
+    BotCommand("weather", "Xem thời tiết và lưu thành phố cho bản tin"),
+    BotCommand("weather_on", "Bật nhận bản tin thời tiết hằng ngày"),
+    BotCommand("weather_off", "Tắt bản tin thời tiết (vẫn nhận cảnh báo)"),
     BotCommand("help", "Xem hướng dẫn sử dụng"),
 ]
 
@@ -1098,6 +1105,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             subscription_ok = False
             logger.exception("Không thể đăng ký cảnh báo cho user %s", update.effective_user.id)
 
+    # Do not change weather_daily_enabled: /weather_off survives /start.
     # Đồng bộ command cho chính private chat này.
     # Nhờ vậy khi người dùng gõ '/', Telegram có danh sách lệnh để gợi ý.
     try:
@@ -1113,6 +1121,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
            else ("\n\nĐể nhận cảnh báo, hãy dùng /start trong chat riêng với bot."
                  if update.effective_chat and update.effective_chat.type != "private"
                  else "\n\n⚠️ Chưa bật được thông báo. Hãy thử /start lại sau khi quản trị viên kiểm tra database."))
+        + "\n\n🌤️ Thời tiết tự động: /weather Hà Nội để chọn thành phố, /weather_on để bật, /weather_off để tắt."
     )
 
 
@@ -1133,6 +1142,38 @@ async def stop_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
+async def weather_on(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type != "private":
+        await update.effective_message.reply_text("Hãy dùng lệnh này trong chat riêng với bot.")
+        return
+    try:
+        await supabase_db.set_daily_weather_subscription(update.effective_user.id, True)
+    except Exception:
+        logger.exception("Failed to enable daily weather")
+        await update.effective_message.reply_text("Không bật được thời tiết, hãy thử lại sau.")
+        return
+    await update.effective_message.reply_text(
+        "Đã bật bản tin thời tiết buổi sáng. Dùng /weather Hà Nội để chọn thành phố. "
+        "Cảnh báo khẩn cấp được quản lý riêng bằng /start và /stop."
+    )
+
+
+async def weather_off(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type != "private":
+        await update.effective_message.reply_text("Hãy dùng lệnh này trong chat riêng với bot.")
+        return
+    try:
+        await supabase_db.set_daily_weather_subscription(update.effective_user.id, False)
+    except Exception:
+        logger.exception("Failed to disable daily weather")
+        await update.effective_message.reply_text("Không tắt được thời tiết, hãy thử lại sau.")
+        return
+    await update.effective_message.reply_text(
+        "Đã tắt bản tin thời tiết hằng ngày. "
+        "Đăng ký cảnh báo đột quỵ không thay đổi. Dùng /weather_on để bật lại."
+    )
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not ensure_started(context):
         await update.message.reply_text("Hãy gửi /start trước để sử dụng bot.")
@@ -1149,6 +1190,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/web giá vàng hôm nay\n"
         "/web tin mới về NVIDIA\n\n"
         "3. Thời tiết:\n"
+        "/weather_on - Bật bản tin thời tiết buổi sáng.\n"
+        "/weather_off - Tắt bản tin thời tiết, không ảnh hưởng cảnh báo.\n"
         "/weather Hà Nội\n"
         "Sau khi dùng /weather Hà Nội một lần, bot sẽ ghi nhớ thành phố để bạn có thể hỏi 'hôm nay bao nhiêu độ?'.\n"
         "Bạn cũng có thể gửi Location của Telegram để bot xem thời tiết tại tọa độ đó.\n\n"
@@ -1242,9 +1285,6 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     city = " ".join(context.args).strip()
-    if city:
-        context.user_data["weather_city"] = city
-
     selected = city or context.user_data.get("weather_city") or DEFAULT_WEATHER_CITY
     if not selected:
         await update.message.reply_text(
@@ -1695,6 +1735,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("reset", with_supabase_state(reset_command)))
     app.add_handler(CommandHandler("web", with_supabase_state(web_command)))
     app.add_handler(CommandHandler("weather", with_supabase_state(weather_command)))
+    app.add_handler(CommandHandler("weather_on", with_supabase_state(weather_on)))
+    app.add_handler(CommandHandler("weather_off", with_supabase_state(weather_off)))
 
     app.add_handler(MessageHandler(filters.PHOTO, with_supabase_state(handle_photo)))
     app.add_handler(
