@@ -9,6 +9,10 @@
     {
       "path": "/gateway/v1/media/staged/admin/cleanup",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/cron/daily-weather",
+      "schedule": "0 0 * * *"
     }
   ]
 }

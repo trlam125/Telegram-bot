@@ -10,6 +10,7 @@ from telegram import Update
 
 from bot import build_application, setup_bot_commands
 from gateway import router as gateway_router
+from daily_weather import router as daily_weather_router
 from gateway_auth_diagnostics import DIAGNOSTIC_VERSION
 from supabase_db import supabase_db
 
@@ -40,6 +41,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Telegram AI Bot + Notification Gateway", lifespan=lifespan)
 app.state.telegram_app = telegram_app
 app.include_router(gateway_router)
+app.include_router(daily_weather_router)
 
 
 @app.get("/")
