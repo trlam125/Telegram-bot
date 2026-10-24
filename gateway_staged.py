@@ -8,13 +8,12 @@ import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from gateway import Level, MediaType, Notification, _authenticated_source, _broadcast_media, _format_notification
+from gateway import Level, MediaType, _authenticated_source, _broadcast_media
 from gateway_media import MEDIA_METHODS, clean_filename
 from gateway_staged_storage import (
     MAX_PHOTO_TRANSIT_BYTES, MAX_TRANSIT_BYTES, TransitError,

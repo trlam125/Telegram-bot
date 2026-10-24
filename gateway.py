@@ -16,11 +16,11 @@ from typing import Literal, Annotated, Awaitable, Callable
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
-from telegram.error import Forbidden, RetryAfter, TelegramError
+from telegram.error import Forbidden, RetryAfter
 
 from supabase_db import supabase_db
 from gateway_auth_diagnostics import log_auth_rejection, log_config_error
-from gateway_media import MAX_UPLOAD_BYTES, MEDIA_METHODS, send_media, validate_reference
+from gateway_media import MAX_UPLOAD_BYTES, send_media, validate_reference
 
 logger = logging.getLogger("telegram-notification-gateway")
 router = APIRouter(prefix="/gateway/v1", tags=["Notification gateway"])
@@ -34,7 +34,7 @@ class Notification(BaseModel):
     level: Literal["info", "warning", "critical"] = "info"
     # Optional single JPEG snapshot. <= 2 MiB decoded, to stay below Vercel body limits.
     image_base64: str | None = Field(default=None, max_length=2_800_000)
-    # Same source + event_id is delivered at most once (see README for limitations).
+    # Event deduplication uses Supabase to claim (source, event_id) once.
     event_id: str | None = Field(
         default=None, min_length=1, max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",

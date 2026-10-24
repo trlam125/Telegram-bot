@@ -26,6 +26,11 @@ outputs/
 generated/
 *.zip
 
+# Deployment excludes: development utilities / tests
+tests/
+examples/
+set_webhook.py
+
 # VCS / IDE
 .git/
 .github/

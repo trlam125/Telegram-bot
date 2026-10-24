@@ -8,7 +8,6 @@ from __future__ import annotations
 import io
 import os
 import re
-from pathlib import PurePath
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException

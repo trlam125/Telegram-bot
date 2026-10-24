@@ -191,11 +191,6 @@ def trim_history(history: List[Dict[str, str]]) -> None:
         del history[:-MAX_HISTORY_MESSAGES]
 
 
-def clear_document_context(context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data.pop("document_name", None)
-    context.user_data.pop("document_text", None)
-
-
 def ensure_started(context: ContextTypes.DEFAULT_TYPE) -> bool:
     return bool(context.user_data.get("started"))
 
@@ -420,15 +415,9 @@ async def call_vision_ai(prompt: str, data: bytes, mime_type: str) -> str:
     return response.choices[0].message.content or "AI không trả về nội dung."
 
 
-
 # -----------------------------
 # Video / audio multimodal handling
 # -----------------------------
-
-def bytes_to_data_uri(data: bytes, mime_type: str) -> str:
-    encoded = base64.b64encode(data).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
-
 
 async def _raw_nvidia_chat(
     *,
@@ -493,7 +482,7 @@ async def _raw_nvidia_chat(
 
 
 async def call_video_direct_ai(prompt: str, data: bytes, mime_type: str) -> str:
-    media_uri = bytes_to_data_uri(data, mime_type)
+    media_uri = image_to_data_uri(data, mime_type)
     messages: List[Dict[str, Any]] = [
         {
             "role": "user",
@@ -1204,10 +1193,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Xóa các tin nhắn gần đây khỏi màn hình chat Telegram.
+    """Dọn tin nhắn Telegram, không reset phiên hoặc dữ liệu AI của người dùng.
 
-    Lệnh này KHÔNG xóa history AI, tài liệu, thành phố hay các trạng thái khác.
-    Telegram Bot API chỉ cho bot xóa các tin nhắn đủ điều kiện (thông thường dưới 48 giờ).
+    Giữ lại một tin nhắn rất ngắn để Telegram không đưa chat về màn hình
+    "Start" khi toàn bộ lịch sử hội thoại biến mất. Bot API chỉ có thể xóa
+    tin nhắn còn trong giới hạn của Telegram (thường là dưới 48 giờ).
     """
     if not ensure_started(context):
         await update.message.reply_text("Hãy gửi /start trước để sử dụng bot.")
@@ -1222,27 +1212,39 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await message.reply_text("/clear màn hình chỉ hỗ trợ trong chat riêng với bot.")
         return
 
+    # Gửi tin nhắn neo TRƯỚC KHI xóa: bảo đảm chat không trở thành hoàn toàn
+    # trống (Telegram có thể hiển thị lại nút Start trong trường hợp đó).
+    # Không dùng reply_text, vì tin nhắn /clear sẽ bị xóa ngay sau đó.
+    # Nếu gửi thất bại, không dọn để tránh đưa chat vào trạng thái khó thao tác.
+    try:
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="Đã dọn tin nhắn. Bạn có thể tiếp tục trò chuyện.",
+        )
+    except TelegramError as exc:
+        logger.warning("Không thể gửi tin nhắn sau /clear cho chat %s: %s", chat.id, exc)
+        return
+
     current_id = message.message_id
     first_id = max(1, current_id - CLEAR_SCREEN_MAX_MESSAGES + 1)
     candidate_ids = list(range(first_id, current_id + 1))
 
-    # deleteMessages cho phép tối đa 100 message_id mỗi lần.
-    # Nếu một batch lỗi vì có message không thể xóa, fallback sang xóa từng message.
+    # Tin nhắn neo được gửi sau /clear, có message_id mới hơn current_id,
+    # nên không nằm trong danh sách xóa. Mỗi batch tối đa 100 message ID.
     for i in range(0, len(candidate_ids), 100):
         batch = candidate_ids[i:i + 100]
         try:
             await context.bot.delete_messages(chat_id=chat.id, message_ids=batch)
-        except Exception as batch_exc:
+        except TelegramError as batch_exc:
             logger.debug("Bulk delete failed, fallback to single delete: %s", batch_exc)
             for message_id in batch:
                 try:
                     await context.bot.delete_message(chat_id=chat.id, message_id=message_id)
                 except TelegramError:
                     pass
-                except Exception:
-                    pass
 
-    # Không gửi thông báo thành công vì mục tiêu là để màn hình chat trống.
+    # Không chỉnh sửa context.user_data: giữ nguyên started, history,
+    # ngữ cảnh tài liệu, thông tin thời tiết và các tùy chọn khác.
 
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
