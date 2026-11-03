@@ -13,8 +13,10 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Header, HTTPException
 from telegram import Bot
 
-from bot import TELEGRAM_BOT_TOKEN, fetch_weather_city, format_weather_fallback
-from supabase_db import supabase_db
+from telegram_bot.core.config import TELEGRAM_BOT_TOKEN
+from telegram_bot.services.weather import fetch_weather_city, format_weather_fallback
+from telegram_bot.db import supabase_db
+from telegram_bot.services.notifications import owner_telegram_id, weather_recipients
 
 logger = logging.getLogger("telegram-daily-weather")
 router = APIRouter(tags=["Daily weather"])
@@ -39,10 +41,16 @@ async def send_daily_weather(authorization: str | None = Header(default=None)) -
     # Must query Supabase, not just send a Telegram message. If the DB fails,
     # do not claim the job has succeeded or silently skip recipients.
     try:
-        recipients = await supabase_db.list_daily_weather_recipients()
+        public_enabled = await supabase_db.get_broadcast_enabled()
+        owner = owner_telegram_id()
+        if not public_enabled and owner is None:
+            raise RuntimeError("TELEGRAM_OWNER_ID is required while broadcasts are off")
+        subscribers = await supabase_db.list_daily_weather_recipients() if public_enabled else []
+        owner_city = await supabase_db.get_daily_weather_city(owner) if owner is not None else None
+        recipients = weather_recipients(subscribers, public_enabled, owner_city)
     except Exception as exc:
-        logger.exception("Failed to retrieve daily weather recipients from Supabase")
-        raise HTTPException(status_code=503, detail="Recipient database unavailable") from exc
+        logger.exception("Failed to retrieve broadcast setting or weather recipients")
+        raise HTTPException(status_code=503, detail="Broadcast settings unavailable") from exc
 
     today = datetime.now(VIETNAM_TZ).strftime("%Y-%m-%d")
     friendly_date = datetime.now(VIETNAM_TZ).strftime("%d/%m/%Y")

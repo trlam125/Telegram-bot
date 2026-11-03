@@ -36,3 +36,8 @@ set_webhook.py
 .github/
 .vscode/
 .idea/
+
+# Project documentation and offline-only scripts
+scripts/
+migrations/
+DEPLOY.md

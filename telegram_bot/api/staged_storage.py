@@ -12,7 +12,7 @@ from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
 
-from supabase_db import supabase_db
+from telegram_bot.db import supabase_db
 
 DEFAULT_BUCKET = 'telegram-gateway-temp'
 MAX_TRANSIT_BYTES = 49_000_000  # Leave room below Telegram's normal 50 MB document cap.

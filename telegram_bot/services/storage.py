@@ -5,7 +5,7 @@ from typing import Any, Optional
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from supabase_db import supabase_db
+from telegram_bot.db import supabase_db
 
 logger = logging.getLogger("telegram-storage")
 

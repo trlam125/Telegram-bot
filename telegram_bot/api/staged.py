@@ -13,13 +13,13 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from gateway import Level, MediaType, _authenticated_source, _broadcast_media
-from gateway_media import MEDIA_METHODS, clean_filename
-from gateway_staged_storage import (
+from telegram_bot.api.gateway_service import Level, MediaType, _authenticated_source, _broadcast_media
+from telegram_bot.api.gateway_media import MEDIA_METHODS, clean_filename
+from telegram_bot.api.staged_storage import (
     MAX_PHOTO_TRANSIT_BYTES, MAX_TRANSIT_BYTES, TransitError,
     create_signed_upload, delete_transit, download_transit,
 )
-from supabase_db import supabase_db
+from telegram_bot.db import supabase_db
 
 logger = logging.getLogger('telegram-gateway.staged')
 router = APIRouter(prefix='/media/staged', tags=['Staged media uploads'])
@@ -147,7 +147,7 @@ async def complete_upload(
                                            int(claimed['file_size']), claimed['media_type'], claimed['filename'])
             try:
                 # Archive once in Lam's storage. The only Telegram credentials live here.
-                from telegram_storage import TELEGRAM_STORAGE_CHAT_ID
+                from telegram_bot.services.storage import TELEGRAM_STORAGE_CHAT_ID
                 method, param = MEDIA_METHODS[claimed['media_type']]
                 caption = f'Gateway archive | {source} | {upload_id}'
                 kwargs = {'chat_id': TELEGRAM_STORAGE_CHAT_ID, param: spool,

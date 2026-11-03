@@ -1,9 +1,4 @@
-"""Authenticated, Telegram-token-free gateway for other repositories.
-
-The upstream project only needs this gateway URL and its own API key.
-Recipients and Telegram credentials are managed exclusively by this bot.
-"""
-
+"""Shared authenticated gateway delivery, types, throttling and dedup."""
 import asyncio
 import base64
 import binascii
@@ -11,20 +6,19 @@ import io
 import logging
 import os
 import secrets
-from datetime import datetime, timezone
-from typing import Literal, Annotated, Awaitable, Callable
-
-from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from typing import Literal, Awaitable, Callable
+from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from telegram.error import Forbidden, RetryAfter
-
-from supabase_db import supabase_db
-from gateway_auth_diagnostics import log_auth_rejection, log_config_error
-from gateway_media import MAX_UPLOAD_BYTES, send_media, validate_reference
-
+from telegram_bot.db import supabase_db
+from telegram_bot.services.notifications import alert_recipients, owner_telegram_id
+from telegram_bot.api.auth_diagnostics import log_auth_rejection, log_config_error
+from telegram_bot.api.gateway_media import send_media
 logger = logging.getLogger("telegram-notification-gateway")
-router = APIRouter(prefix="/gateway/v1", tags=["Notification gateway"])
 
+MediaType = Literal["photo", "video", "document", "audio", "voice", "animation"]
+Level = Literal["info", "warning", "critical"]
+MAX_PHOTO_BYTES = 2_000_000
 
 class Notification(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -40,7 +34,6 @@ class Notification(BaseModel):
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
     )
 
-
 class FallNotification(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -52,12 +45,6 @@ class FallNotification(BaseModel):
         default=None, min_length=1, max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
     )
-
-
-
-MediaType = Literal["photo", "video", "document", "audio", "voice", "animation"]
-Level = Literal["info", "warning", "critical"]
-
 
 class MediaReference(BaseModel):
     """Send a Telegram-hosted file_id or a file at an allowed HTTPS host."""
@@ -71,7 +58,6 @@ class MediaReference(BaseModel):
     level: Level = "info"
     event_id: str | None = Field(default=None, min_length=1, max_length=128,
                                  pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
-
 
 def _configured_keys() -> dict[str, str]:
     """Read project:secret entries separated by semicolons; support one legacy key."""
@@ -92,7 +78,6 @@ def _configured_keys() -> dict[str, str]:
         keys["default"] = single_key
     return keys
 
-
 def _authenticated_source(key: str | None) -> str:
     keys = _configured_keys()
     if not keys:
@@ -110,15 +95,10 @@ def _authenticated_source(key: str | None) -> str:
         raise HTTPException(status_code=401, detail="Invalid gateway key")
     return matched[0]
 
-
 def _format_notification(payload: Notification, source: str) -> str:
     prefix = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}[payload.level]
     title = payload.title.strip() if payload.title else "Thông báo hệ thống"
     return f"{prefix} {title}\n\n{payload.message.strip()}\n\nNguồn: {source}"
-
-
-MAX_PHOTO_BYTES = 2_000_000
-
 
 def _photo_from_payload(payload: Notification) -> bytes | None:
     """Validate before claiming event_id; do not let invalid photos poison dedup."""
@@ -134,7 +114,6 @@ def _photo_from_payload(payload: Notification) -> bytes | None:
         raise HTTPException(422, "image_base64 must be JPEG up to 2 MB")
     return photo
 
-
 async def _send_to_chat(bot, chat_id: int, message: str, photo_bytes: bytes | None):
     if photo_bytes is None:
         await bot.send_message(chat_id=chat_id, text=message)
@@ -146,7 +125,6 @@ async def _send_to_chat(bot, chat_id: int, message: str, photo_bytes: bytes | No
             caption=message[:1024],
         )
 
-
 async def _broadcast_with_sender(
     request: Request, source: str, event_id: str | None,
     sender: Callable[[object, int], Awaitable[None]],
@@ -154,10 +132,14 @@ async def _broadcast_with_sender(
     """One shared subscriber, throttling and dedup pipeline for all media types."""
     bot = request.app.state.telegram_app.bot
     try:
-        recipients = await supabase_db.list_alert_subscribers()
+        public_enabled = await supabase_db.get_broadcast_enabled()
+        if not public_enabled and owner_telegram_id() is None:
+            raise RuntimeError("TELEGRAM_OWNER_ID is required while broadcasts are off")
+        subscribers = await supabase_db.list_alert_subscribers() if public_enabled else []
+        recipients = alert_recipients(subscribers, public_enabled)
     except Exception as exc:
-        logger.exception("Cannot load gateway recipients")
-        raise HTTPException(status_code=503, detail="Subscriber database unavailable") from exc
+        logger.exception("Cannot load global broadcast setting or gateway recipients")
+        raise HTTPException(status_code=503, detail="Broadcast settings unavailable") from exc
 
     max_recipients = int(os.getenv("GATEWAY_MAX_RECIPIENTS", "1000"))
     if len(recipients) > max_recipients:
@@ -224,7 +206,6 @@ async def _broadcast_with_sender(
         "sent": sent, "failed": failed, "blocked": blocked,
     }
 
-
 async def _broadcast(request: Request, payload: Notification, source: str) -> dict:
     photo_bytes = _photo_from_payload(payload)  # Validate before event claim.
     message = _format_notification(payload, source)
@@ -236,42 +217,6 @@ async def _broadcast(request: Request, payload: Notification, source: str) -> di
     if not result["duplicate"]:
         result["photo"] = photo_bytes is not None
     return result
-
-
-@router.post("/notify")
-async def notify(
-    request: Request,
-    payload: Notification,
-    x_gateway_key: str | None = Header(default=None),
-) -> dict:
-    source = _authenticated_source(x_gateway_key)
-    return await _broadcast(request, payload, source)
-
-
-@router.post("/fall")
-async def fall_alert(
-    request: Request,
-    payload: FallNotification,
-    x_gateway_key: str | None = Header(default=None),
-) -> dict:
-    source = _authenticated_source(x_gateway_key)
-    event_time = payload.event_time or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    lines = [
-        f"📷 Camera: {payload.camera}",
-        f"🕒 Thời gian: {event_time}",
-    ]
-    if payload.location:
-        lines.append(f"📍 Vị trí: {payload.location}")
-    lines.append("Phát hiện dấu hiệu người bị ngã. Vui lòng kiểm tra ngay!")
-    message = Notification(
-        title="CẢNH BÁO PHÁT HIỆN NGÃ",
-        message="\n".join(lines),
-        level="critical",
-        event_id=payload.event_id,
-        image_base64=payload.image_base64,
-    )
-    return await _broadcast(request, message, source)
-
 
 async def _broadcast_media(request: Request, *, source: str, media_type: str,
                            data: bytes | str, message: str, title: str | None,
@@ -288,52 +233,3 @@ async def _broadcast_media(request: Request, *, source: str, media_type: str,
     if not result["duplicate"]:
         result["media_type"] = media_type
     return result
-
-
-@router.post("/media")
-async def media_reference(
-    request: Request,
-    payload: MediaReference,
-    x_gateway_key: str | None = Header(default=None),
-) -> dict:
-    """Send a Telegram file_id or a public HTTPS media URL on an allowed host."""
-    source = _authenticated_source(x_gateway_key)
-    reference = validate_reference(file_url=payload.file_url, file_id=payload.file_id)
-    return await _broadcast_media(
-        request, source=source, media_type=payload.media_type, data=reference,
-        message=payload.message, title=payload.title, level=payload.level,
-        event_id=payload.event_id,
-    )
-
-
-@router.post("/media/upload")
-async def media_upload(
-    request: Request,
-    media_type: Annotated[MediaType, Form()],
-    file: Annotated[UploadFile, File()],
-    message: Annotated[str, Form(max_length=3500)] = "Tệp đính kèm",
-    title: Annotated[str | None, Form(max_length=120)] = None,
-    level: Annotated[Level, Form()] = "info",
-    event_id: Annotated[str | None, Form(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")] = None,
-    x_gateway_key: str | None = Header(default=None),
-) -> dict:
-    """Upload one small file (Vercel HTTP body limit is 4.5 MB)."""
-    source = _authenticated_source(x_gateway_key)
-    try:
-        # Bound memory use; never read the entire user upload unchecked.
-        data = await file.read(MAX_UPLOAD_BYTES + 1)
-        if not data:
-            raise HTTPException(422, "Uploaded file must not be empty")
-        if len(data) > MAX_UPLOAD_BYTES:
-            raise HTTPException(413, "File exceeds direct upload limit (3.5 MB); use /media with an HTTPS URL or file_id")
-        return await _broadcast_media(
-            request, source=source, media_type=media_type, data=data,
-            message=message, title=title, level=level, event_id=event_id,
-            filename=file.filename,
-        )
-    finally:
-        await file.close()
-
-# Staged uploads use the same credentials / broadcast methods as the existing API.
-from gateway_staged import router as staged_router
-router.include_router(staged_router)
