@@ -41,11 +41,16 @@ async def send_daily_weather(authorization: str | None = Header(default=None)) -
     # Must query Supabase, not just send a Telegram message. If the DB fails,
     # do not claim the job has succeeded or silently skip recipients.
     try:
-        public_enabled = await supabase_db.get_broadcast_enabled()
+        public_enabled, epoch = await supabase_db.get_broadcast_settings()
         owner = owner_telegram_id()
         if not public_enabled and owner is None:
             raise RuntimeError("TELEGRAM_OWNER_ID is required while broadcasts are off")
-        subscribers = await supabase_db.list_daily_weather_recipients() if public_enabled else []
+        if public_enabled:
+            active_ids = await supabase_db.list_active_subscription_ids(epoch)
+            all_weather_users = await supabase_db.list_daily_weather_recipients()
+            subscribers = [row for row in all_weather_users if int(row["telegram_id"]) in active_ids]
+        else:
+            subscribers = []
         owner_city = await supabase_db.get_daily_weather_city(owner) if owner is not None else None
         recipients = weather_recipients(subscribers, public_enabled, owner_city)
     except Exception as exc:

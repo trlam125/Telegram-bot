@@ -132,10 +132,15 @@ async def _broadcast_with_sender(
     """One shared subscriber, throttling and dedup pipeline for all media types."""
     bot = request.app.state.telegram_app.bot
     try:
-        public_enabled = await supabase_db.get_broadcast_enabled()
+        public_enabled, epoch = await supabase_db.get_broadcast_settings()
         if not public_enabled and owner_telegram_id() is None:
             raise RuntimeError("TELEGRAM_OWNER_ID is required while broadcasts are off")
-        subscribers = await supabase_db.list_alert_subscribers() if public_enabled else []
+        if public_enabled:
+            active_ids = await supabase_db.list_active_subscription_ids(epoch)
+            subscribers = await supabase_db.list_alert_subscribers()
+            subscribers = [user_id for user_id in subscribers if user_id in active_ids]
+        else:
+            subscribers = []
         recipients = alert_recipients(subscribers, public_enabled)
     except Exception as exc:
         logger.exception("Cannot load global broadcast setting or gateway recipients")

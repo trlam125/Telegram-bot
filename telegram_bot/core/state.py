@@ -5,6 +5,7 @@ from typing import Dict, List
 from telegram import Update
 from telegram.ext import ContextTypes
 from telegram_bot.db import supabase_db
+from telegram_bot.services.notifications import owner_telegram_id
 from telegram_bot.core.config import MAX_HISTORY_MESSAGES
 logger = logging.getLogger("telegram-nvidia-ai-v4.2")
 
@@ -18,6 +19,16 @@ def with_supabase_state(callback):
         user = update.effective_user
         if user is None:
             return await callback(update, context)
+
+        # Enforce the blocklist before any handler can reply, run AI or archive media.
+        # Database errors fail closed rather than silently allowing a banned user.
+        if user.id != owner_telegram_id():
+            try:
+                if await supabase_db.is_user_blocked(user.id):
+                    return
+            except Exception:
+                logger.exception("Could not verify access for Telegram user %s", user.id)
+                return
 
         try:
             await supabase_db.upsert_user(user)

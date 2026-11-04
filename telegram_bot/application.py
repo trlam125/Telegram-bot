@@ -1,16 +1,17 @@
 """Build the python-telegram-bot Application for polling or webhook."""
 import logging
-from telegram import (BotCommandScopeDefault, BotCommandScopeAllPrivateChats,
+from telegram import (BotCommandScopeDefault, BotCommandScopeAllPrivateChats, BotCommandScopeChat,
     MenuButtonCommands)
 from telegram.ext import (Application, CommandHandler, ContextTypes, MessageHandler, filters)
 from telegram_bot.core.config import (TELEGRAM_BOT_TOKEN, TEXT_MODEL, VISION_MODEL,
     OMNI_MODEL, NVIDIA_BASE_URL, AUTO_WEB_SEARCH, AUTO_WEATHER)
 from telegram_bot.core.state import with_supabase_state
-from telegram_bot.handlers.commands import (BOT_COMMANDS, start, stop_alerts,
-    notify_off, notify_on, help_command, clear_command, reset_command,
+from telegram_bot.handlers.commands import (BOT_COMMANDS, OWNER_BROADCAST_COMMANDS, start, stop_alerts,
+    notify_off, notify_on, reset_subscribers, block_user, unblock_user, help_command, clear_command, reset_command,
     web_command, weather_command, weather_on, weather_off)
 from telegram_bot.handlers.messages import (chat, handle_photo, handle_document,
     handle_video, handle_audio, handle_location, unknown_command, unsupported_message)
+from telegram_bot.services.notifications import owner_telegram_id
 logger = logging.getLogger("telegram-nvidia-ai-v4.2")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -61,6 +62,18 @@ async def setup_bot_commands(application: Application) -> None:
                     exc,
                 )
 
+    # A user-specific scope outranks the global/private menus. This only exposes
+    # admin command suggestions to the Telegram account in TELEGRAM_OWNER_ID.
+    owner = owner_telegram_id()
+    if owner is not None:
+        owner_scope = BotCommandScopeChat(chat_id=owner)
+        owner_commands = BOT_COMMANDS + OWNER_BROADCAST_COMMANDS
+        await application.bot.set_my_commands(owner_commands, scope=owner_scope)
+        for language_code in language_codes:
+            await application.bot.set_my_commands(
+                owner_commands, scope=owner_scope, language_code=language_code,
+            )
+
     await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
     registered = await application.bot.get_my_commands(
@@ -83,6 +96,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("start", with_supabase_state(start)))
     app.add_handler(CommandHandler("notify_off", with_supabase_state(notify_off)))
     app.add_handler(CommandHandler("notify_on", with_supabase_state(notify_on)))
+    app.add_handler(CommandHandler("reset_subscribers", with_supabase_state(reset_subscribers)))
+    app.add_handler(CommandHandler("block", with_supabase_state(block_user)))
+    app.add_handler(CommandHandler("unblock", with_supabase_state(unblock_user)))
     app.add_handler(CommandHandler("stop", with_supabase_state(stop_alerts)))
     app.add_handler(CommandHandler("help", with_supabase_state(help_command)))
     app.add_handler(CommandHandler("clear", with_supabase_state(clear_command)))

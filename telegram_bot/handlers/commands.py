@@ -7,7 +7,7 @@ from telegram.ext import ContextTypes
 from telegram_bot.core.config import CLEAR_SCREEN_MAX_MESSAGES, DEFAULT_WEATHER_CITY
 from telegram_bot.core.state import ensure_started
 from telegram_bot.db import supabase_db
-from telegram_bot.services.notifications import is_owner_private_chat
+from telegram_bot.services.notifications import is_owner_private_chat, owner_telegram_id
 from telegram_bot.services.search import answer_with_web
 from telegram_bot.services.weather import answer_weather
 logger = logging.getLogger("telegram-nvidia-ai-v4.2")
@@ -27,6 +27,9 @@ BOT_COMMANDS = [
 OWNER_BROADCAST_COMMANDS = [
     BotCommand("notify_off", "Tắt gửi thông báo cho tất cả trừ chủ bot"),
     BotCommand("notify_on", "Bật lại thông báo cho mọi người đã đăng ký"),
+    BotCommand("reset_subscribers", "Thu hồi đăng ký, yêu cầu /start lại"),
+    BotCommand("block", "Chặn người dùng theo Telegram ID"),
+    BotCommand("unblock", "Bỏ chặn người dùng theo Telegram ID"),
 ]
 
 async def ensure_chat_command_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -117,18 +120,92 @@ async def notify_off(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def notify_on(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await set_global_notifications(update, True)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # /start bắt đầu một phiên mới sạch sẽ nhưng vẫn giữ bot ở trạng thái đã khởi động.
-    context.user_data.clear()
-    context.user_data["started"] = True
+async def reset_subscribers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Revoke everyone else's access to automated notifications until /start."""
+    if not is_owner_private_chat(update):
+        await update.effective_message.reply_text("Chỉ chủ bot mới sử dụng được lệnh này.")
+        return
+    try:
+        await supabase_db.reset_all_subscriptions()
+    except Exception:
+        logger.exception("Could not reset subscribers")
+        await update.effective_message.reply_text(
+            "Không thể thu hồi đăng ký. Hãy kiểm tra migration và kết nối Supabase."
+        )
+        return
+    await update.effective_message.reply_text(
+        "Đã thu hồi quyền nhận thông báo của mọi người dùng. "
+        "Chỉ sau khi gửi /start lại, họ mới có thể nhận cảnh báo "
+        "và bản tin thời tiết. Chủ bot vẫn nhận tin."
+    )
 
-    subscription_ok = True
+
+def _target_user_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    """Accept a numeric ID or a reply to a user's message (no username lookup)."""
+    if context.args:
+        try:
+            user_id = int(context.args[0])
+            return user_id if user_id > 0 else None
+        except (TypeError, ValueError):
+            return None
+    replied_to = getattr(update.effective_message, "reply_to_message", None)
+    from_user = getattr(replied_to, "from_user", None)
+    return int(from_user.id) if from_user and int(from_user.id) > 0 else None
+
+
+async def _set_block(update: Update, context: ContextTypes.DEFAULT_TYPE, blocked: bool) -> None:
+    if not is_owner_private_chat(update):
+        await update.effective_message.reply_text("Chỉ chủ bot mới sử dụng được lệnh này.")
+        return
+    target = _target_user_id(update, context)
+    if target is None:
+        instruction = "/block" if blocked else "/unblock"
+        await update.effective_message.reply_text(
+            f"Cách dùng: {instruction} <Telegram ID> hoặc trả lời tin nhắn bằng {instruction}."
+        )
+        return
+    if target == owner_telegram_id():
+        await update.effective_message.reply_text("Không thể tự chặn chủ bot.")
+        return
+    try:
+        await supabase_db.set_user_blocked(target, blocked)
+    except Exception:
+        logger.exception("Could not change block state for user %s", target)
+        await update.effective_message.reply_text(
+            "Không thể thay đổi danh sách chặn. Hãy kiểm tra kết nối Supabase."
+        )
+        return
+    if blocked:
+        message = f"Đã chặn người dùng {target}. Họ không thể chat với bot hay nhận thông báo."
+    else:
+        message = f"Đã bỏ chặn người dùng {target}. Họ cần gửi /start để đăng ký nhận tin trở lại."
+    await update.effective_message.reply_text(message)
+
+
+async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _set_block(update, context, True)
+
+
+async def unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _set_block(update, context, False)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    subscription_ok = False
     if update.effective_chat and update.effective_chat.type == "private":
         try:
+            activated = await supabase_db.activate_subscription(update.effective_user.id)
+            if not activated:
+                await update.effective_message.reply_text("Tài khoản đang bị chặn.")
+                return
             await supabase_db.set_alert_subscription(update.effective_user.id, True)
+            subscription_ok = True
         except Exception:
-            subscription_ok = False
             logger.exception("Không thể đăng ký cảnh báo cho user %s", update.effective_user.id)
+
+    # /start resets the AI session, but retains previous weather opt-out.
+    context.user_data.clear()
+    context.user_data["started"] = True
 
     # Do not change weather_daily_enabled: /weather_off survives /start.
     # Đồng bộ command cho chính private chat này.
@@ -170,6 +247,11 @@ async def weather_on(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.effective_message.reply_text("Hãy dùng lệnh này trong chat riêng với bot.")
         return
     try:
+        if not await supabase_db.is_subscription_active(update.effective_user.id):
+            await update.effective_message.reply_text(
+                "Bạn phải gửi /start lại trước khi bật nhận bản tin thời tiết."
+            )
+            return
         await supabase_db.set_daily_weather_subscription(update.effective_user.id, True)
     except Exception:
         logger.exception("Failed to enable daily weather")
@@ -221,8 +303,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "6. Video: quay bằng điện thoại rồi gửi MP4/MOV vào bot, có thể kèm caption như 'Tóm tắt video này'.\n\n"
         "7. Audio/Voice: gửi file âm thanh hoặc tin nhắn thoại để bot nghe, chép lời và phân tích.\n\n"
         "Lưu ý: media vẫn được lưu vào Storage trước. Giới hạn 20 MB mặc định chỉ áp dụng cho bước bot tải file về để AI phân tích; video phân tích tối đa 120 giây. PDF scan chỉ chứa ảnh có thể không trích xuất được chữ."
-        + ("\n\nQuản trị thông báo: /notify_off - chỉ chủ bot nhận; "
-           "/notify_on - bật lại cho tất cả người đã đăng ký."
+        + ("\n\nQuản trị: /notify_off, /notify_on, /reset_subscribers, "
+           "/block <Telegram ID>, /unblock <Telegram ID>. "
+           "Lệnh reset yêu cầu mọi người /start lại."
            if is_owner_private_chat(update) else "")
     )
 
