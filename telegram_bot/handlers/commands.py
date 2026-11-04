@@ -168,12 +168,21 @@ async def _set_block(update: Update, context: ContextTypes.DEFAULT_TYPE, blocked
         await update.effective_message.reply_text("Không thể tự chặn chủ bot.")
         return
     try:
-        await supabase_db.set_user_blocked(target, blocked)
+        changed = await supabase_db.set_user_blocked(target, blocked)
     except Exception:
         logger.exception("Could not change block state for user %s", target)
         await update.effective_message.reply_text(
             "Không thể thay đổi danh sách chặn. Hãy kiểm tra kết nối Supabase."
         )
+        return
+    if not changed:
+        if blocked:
+            message = (f"Không tìm thấy Telegram ID {target} trong dữ liệu người dùng bot. "
+                       "Không có tài khoản nào bị chặn.")
+        else:
+            message = (f"Không thể bỏ chặn ID {target}: người dùng không tồn tại "
+                       "trong dữ liệu bot hoặc hiện không bị chặn.")
+        await update.effective_message.reply_text(message)
         return
     if blocked:
         message = f"Đã chặn người dùng {target}. Họ không thể chat với bot hay nhận thông báo."

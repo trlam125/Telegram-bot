@@ -53,15 +53,35 @@ class NotificationRepository:
             raise RuntimeError("Invalid subscription activation result")
         return response.json()
 
-    async def set_user_blocked(self, telegram_id: int, blocked: bool) -> None:
-        """Blocking or unblocking always revokes notification consent until /start."""
+    async def is_known_user(self, telegram_id: int) -> bool:
+        """A target must be an actual bot user; never create a phantom account."""
         response = await self._request(
-            "POST", "rpc/bot_set_user_blocked",
-            json_body={"p_telegram_id": int(telegram_id), "p_blocked": bool(blocked)},
+            "GET", "bot_users",
+            params={"select": "telegram_id", "telegram_id": f"eq.{int(telegram_id)}", "limit": "1"},
         )
         response.raise_for_status()
-        if response.json() is not True:
-            raise RuntimeError("Could not persist user's block state")
+        return bool(response.json())
+
+    async def set_user_blocked(self, telegram_id: int, blocked: bool) -> bool:
+        """Change a known user's block state, revoking notification consent.
+
+        False means no matching user (or no active block when unblocking).
+        Migration 003 performs the same checks atomically in the database.
+        """
+        telegram_id = int(telegram_id)
+        if not await self.is_known_user(telegram_id):
+            return False
+        if not blocked and not await self.is_user_blocked(telegram_id):
+            return False
+        response = await self._request(
+            "POST", "rpc/bot_set_user_blocked",
+            json_body={"p_telegram_id": telegram_id, "p_blocked": bool(blocked)},
+        )
+        response.raise_for_status()
+        result = response.json()
+        if not isinstance(result, bool):
+            raise RuntimeError("Invalid block-state response; check migration 003")
+        return result
 
     async def is_user_blocked(self, telegram_id: int) -> bool:
         response = await self._request(
