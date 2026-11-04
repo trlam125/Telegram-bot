@@ -1,98 +1,116 @@
-# =========================
-# Python
-# =========================
+# Telegram Bot (Python + Supabase + Vercel)
+# Keep app source, requirements.txt, vercel.json, .vercelignore,
+# .env.example, migrations/*.sql, and tests/ in Git.
+
+# --- Python bytecode / caches ---
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.pyright/
+.hypothesis/
 
-# Virtual environments
+# --- Python environments ---
 .venv/
 venv/
 env/
 ENV/
+virtualenv/
+.python-version
+pip-wheel-metadata/
 
-# =========================
-# Environment / Secrets
-# =========================
+# --- Secrets and local environment configuration ---
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+credentials.json
+token.json
+secrets.json
+service-account*.json
+service_account*.json
 
-# =========================
-# Local database / state
-# =========================
+# --- Local state / databases (production data lives in Supabase) ---
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 *.pkl
 *.pickle
-bot_data.pkl
+*.session
+*.session-journal
 
-# =========================
-# Logs
-# =========================
+# --- Logs and runtime artifacts ---
 *.log
+*.log.*
 logs/
+*.pid
+*.pid.lock
+*.seed
 
-# =========================
-# Temporary files
-# =========================
+# --- Temporary / generated / downloaded media ---
 tmp/
 temp/
-*.tmp
-*.temp
-
-# =========================
-# Media / generated files
-# =========================
+.cache/
 downloads/
 uploads/
 output/
 outputs/
 generated/
 generated-image/
+*.tmp
+*.temp
+*.part
+*.partial
 
-# =========================
-# IDE
-# =========================
-.vscode/
-.idea/
-
-# =========================
-# OS
-# =========================
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# =========================
-# Python tooling
-# =========================
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+# --- Test / coverage output ---
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+.tox/
+.nox/
 
-# =========================
-# Build / package
-# =========================
+# --- Build / packaging output ---
 build/
 dist/
 *.egg-info/
 .eggs/
+wheels/
+*.whl
+*.zip
 
-# =========================
-# Google Cloud local files
-# =========================
+# --- Local tooling / deployment metadata ---
+.vercel/
 .gcloud/
 
-# =========================
-# Vercel local metadata
-# =========================
-.vercel/
-
-# =========================
-# Misc
-# =========================
-*.bak
-*.zip
+# --- IDE / editor ---
+.vscode/
+.idea/
+*.code-workspace
 *.swp
 *.swo
+*~
+
+# --- OS / backups ---
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.bak
+*.backup
+*.orig
+
+# Intentionally tracked:
+# .env.example, .vercelignore, vercel.json, migrations/, tests/

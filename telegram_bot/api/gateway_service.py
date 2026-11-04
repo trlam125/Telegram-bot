@@ -98,7 +98,7 @@ def _authenticated_source(key: str | None) -> str:
 def _format_notification(payload: Notification, source: str) -> str:
     prefix = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}[payload.level]
     title = payload.title.strip() if payload.title else "Thông báo hệ thống"
-    return f"{prefix} {title}\n\n{payload.message.strip()}\n\nNguồn: {source}"
+    return f"{prefix} {title}\n\n{payload.message.strip()}"
 
 def _photo_from_payload(payload: Notification) -> bytes | None:
     """Validate before claiming event_id; do not let invalid photos poison dedup."""
