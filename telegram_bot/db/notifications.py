@@ -92,6 +92,59 @@ class NotificationRepository:
         rows = response.json() or []
         return bool(rows[0]["blocked"]) if rows else False
 
+    async def list_blocked_users(self) -> list[dict]:
+        """Get all blocked IDs plus stored Telegram names (no new SQL migration).
+
+        Pagination ensures no blocked users are silently omitted by PostgREST's
+        row limit. Metadata is loaded in small batches to avoid long query URLs.
+        """
+        blocked_ids: list[int] = []
+        offset, page_size = 0, 500
+        while True:
+            response = await self._request(
+                "GET", "bot_notification_access",
+                params={
+                    "select": "telegram_id", "blocked": "eq.true",
+                    "order": "telegram_id.asc", "limit": str(page_size),
+                    "offset": str(offset),
+                },
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list):
+                raise RuntimeError("Invalid blocked-user query result")
+            blocked_ids.extend(int(row["telegram_id"]) for row in rows)
+            if len(rows) < page_size:
+                break
+            offset += page_size
+
+        users_by_id: dict[int, dict] = {}
+        batch_size = 100
+        for start in range(0, len(blocked_ids), batch_size):
+            batch = blocked_ids[start:start + batch_size]
+            response = await self._request(
+                "GET", "bot_users",
+                params={
+                    "select": "telegram_id,username,first_name,last_name",
+                    "telegram_id": "in.(" + ",".join(map(str, batch)) + ")",
+                    "limit": str(len(batch)),
+                },
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list):
+                raise RuntimeError("Invalid blocked-user metadata result")
+            for row in rows:
+                users_by_id[int(row["telegram_id"])] = row
+
+        return [
+            {"telegram_id": user_id,
+             "username": users_by_id.get(user_id, {}).get("username"),
+             "first_name": users_by_id.get(user_id, {}).get("first_name"),
+             "last_name": users_by_id.get(user_id, {}).get("last_name")}
+            for user_id in blocked_ids
+        ]
+
     async def is_subscription_active(self, telegram_id: int) -> bool:
         """Useful for explaining /start is required after an owner reset."""
         _, epoch = await self.get_broadcast_settings()

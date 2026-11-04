@@ -30,6 +30,7 @@ OWNER_BROADCAST_COMMANDS = [
     BotCommand("reset_subscribers", "Thu hồi đăng ký, yêu cầu /start lại"),
     BotCommand("block", "Chặn người dùng theo Telegram ID"),
     BotCommand("unblock", "Bỏ chặn người dùng theo Telegram ID"),
+    BotCommand("blocked_list", "Xem ID và tên người dùng đang bị chặn"),
 ]
 
 async def ensure_chat_command_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -199,6 +200,55 @@ async def unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _set_block(update, context, False)
 
 
+def _safe_user_field(value: object, max_length: int = 100) -> str:
+    """Prevent stored names from breaking the one-user-per-entry layout."""
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:max_length]
+
+
+async def blocked_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner-only list of all currently blocked users and their stored names."""
+    if not is_owner_private_chat(update):
+        await update.effective_message.reply_text("Chỉ chủ bot mới sử dụng được lệnh này.")
+        return
+
+    try:
+        users = await supabase_db.list_blocked_users()
+    except Exception:
+        logger.exception("Could not list blocked users")
+        await update.effective_message.reply_text(
+            "Không thể tải danh sách chặn từ Supabase. Vui lòng thử lại sau."
+        )
+        return
+
+    if not users:
+        await update.effective_message.reply_text("Danh sách chặn hiện đang trống.")
+        return
+
+    header = f"Danh sách người dùng bị chặn: {len(users)}\n\n"
+    max_message_size = 3800  # Telegram text-message limit is 4096 characters.
+    message = header
+    for number, user in enumerate(users, 1):
+        user_id = int(user["telegram_id"])
+        name = " ".join(part for part in (
+            _safe_user_field(user.get("first_name")),
+            _safe_user_field(user.get("last_name")),
+        ) if part) or "Chưa có tên"
+        username = _safe_user_field(user.get("username"), 64).lstrip("@")
+        entry = f"{number}. {name}\nID: {user_id}"
+        if username:
+            entry += f"\nUsername: @{username}"
+        entry += "\n\n"
+        if len(message) + len(entry) > max_message_size:
+            await update.effective_message.reply_text(message.rstrip())
+            message = header
+        message += entry
+
+    if message != header:
+        await update.effective_message.reply_text(message.rstrip())
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     subscription_ok = False
     if update.effective_chat and update.effective_chat.type == "private":
@@ -313,7 +363,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "7. Audio/Voice: gửi file âm thanh hoặc tin nhắn thoại để bot nghe, chép lời và phân tích.\n\n"
         "Lưu ý: media vẫn được lưu vào Storage trước. Giới hạn 20 MB mặc định chỉ áp dụng cho bước bot tải file về để AI phân tích; video phân tích tối đa 120 giây. PDF scan chỉ chứa ảnh có thể không trích xuất được chữ."
         + ("\n\nQuản trị: /notify_off, /notify_on, /reset_subscribers, "
-           "/block <Telegram ID>, /unblock <Telegram ID>. "
+           "/block <Telegram ID>, /unblock <Telegram ID>, /blocked_list. "
            "Lệnh reset yêu cầu mọi người /start lại."
            if is_owner_private_chat(update) else "")
     )

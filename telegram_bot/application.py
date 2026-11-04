@@ -7,7 +7,7 @@ from telegram_bot.core.config import (TELEGRAM_BOT_TOKEN, TEXT_MODEL, VISION_MOD
     OMNI_MODEL, NVIDIA_BASE_URL, AUTO_WEB_SEARCH, AUTO_WEATHER)
 from telegram_bot.core.state import with_supabase_state
 from telegram_bot.handlers.commands import (BOT_COMMANDS, OWNER_BROADCAST_COMMANDS, start, stop_alerts,
-    notify_off, notify_on, reset_subscribers, block_user, unblock_user, help_command, clear_command, reset_command,
+    notify_off, notify_on, reset_subscribers, block_user, unblock_user, blocked_list, help_command, clear_command, reset_command,
     web_command, weather_command, weather_on, weather_off)
 from telegram_bot.handlers.messages import (chat, handle_photo, handle_document,
     handle_video, handle_audio, handle_location, unknown_command, unsupported_message)
@@ -99,6 +99,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("reset_subscribers", with_supabase_state(reset_subscribers)))
     app.add_handler(CommandHandler("block", with_supabase_state(block_user)))
     app.add_handler(CommandHandler("unblock", with_supabase_state(unblock_user)))
+    app.add_handler(CommandHandler("blocked_list", with_supabase_state(blocked_list)))
     app.add_handler(CommandHandler("stop", with_supabase_state(stop_alerts)))
     app.add_handler(CommandHandler("help", with_supabase_state(help_command)))
     app.add_handler(CommandHandler("clear", with_supabase_state(clear_command)))
